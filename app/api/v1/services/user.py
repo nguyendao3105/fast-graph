@@ -1,7 +1,6 @@
 from fastapi import Depends, HTTPException, status
 from app.core.utils.db import neo4j_driver
 from app.model import UserInDB, User
-from app.api.v1.services.authorization import get_current_user
 
 async def get_user_with_username(username: str):
     query = 'MATCH (user:User) WHERE user.username = $username RETURN user'
@@ -19,7 +18,22 @@ def get_user(username: str):
         user_data = user_in_db.data()[0]['a']
         return UserInDB(**user_data)
 
-async def get_current_active_user(current_user: User = Depends(get_current_user)):
-    if current_user.disabled:
-        raise HTTPException(status_code=400, detail="Inactive user")
-    return current_user
+
+async def create_user(attributes: dict):
+    cypher_search = 'MATCH (user:User) WHERE user.username = $username RETURN user'
+    cypher_create = 'CREATE (user:User $params) RETURN user'
+
+    with neo4j_driver.session() as session:
+        # First, run a search of users to determine if username is already in use
+        check_users = session.run(query=cypher_search, parameters={'username':attributes['username']})
+        
+        # Return error message if username is already in the database
+        if check_users.data():
+            raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Operation not permitted, user with username {attributes['username']} already exists.",
+            headers={"WWW-Authenticate": "Bearer"})
+
+        response = session.run(query=cypher_create, parameters={'params':attributes})
+        user_data = response.data()[0]['user']
+        return user_data
